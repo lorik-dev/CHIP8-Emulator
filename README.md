@@ -8,7 +8,7 @@ Written in C using SDL
 ### Dependencies:
 
 *libsdl2-dev*  
-sudo apt-get install libsdl2
+sudo apt-get install libsdl2-dev
 
 *make*  
 sudo apt-get install make
