@@ -43,7 +43,6 @@ typedef struct {
 	uint8_t Y;		// 4 bit register identifer
 } chip8_instruction_t;
 
-
 // CHIP8 machine object
 typedef struct {
 	emulator_state_t state;
@@ -51,7 +50,7 @@ typedef struct {
 	bool display[64*32];	// Emulate original CHIP8 resolution pixels
 	uint16_t stack[12];		// Subroutine stack
 	uint16_t stack_ptr;     // Ptr to first empty stack element
-	uint8_t V[16];			// V0-VF data registers
+	uint8_t V[16];   		// V0-VF data registers
 	uint16_t I;				// I memory register
 	uint16_t PC;			// PC Program counter
 	uint8_t delay_timer;	// Decrements at 60hz when >0
@@ -60,6 +59,7 @@ typedef struct {
 	const char *rom_name;			// File name of currently running ROM
 	chip8_instruction_t inst; 		// Currently executing instruction
 } chip8_t;
+
 
 bool init_sdl(sdl_display_t *sdl, const config_t config){
 	if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO) != 0) {
@@ -171,6 +171,16 @@ SDL_SetRenderDrawColor(sdl.renderer, r, g, b, a);
 	SDL_RenderClear(sdl.renderer);
 }
 
+void set_draw_color_fg(const sdl_display_t sdl, const config_t config)
+{
+	const uint8_t r = (config.fg_color >> 24) & 0xFF;
+    const uint8_t g = (config.fg_color >> 16) & 0xFF;
+    const uint8_t b = (config.fg_color >> 8) & 0xFF;
+    const uint8_t a = (config.fg_color >> 0) & 0xFF;
+
+	SDL_SetRenderDrawColor(sdl.renderer, r, g, b, a);
+}
+
 // Update window with any changes
 void update_screen(const sdl_display_t sdl) {
 	SDL_RenderPresent(sdl.renderer);
@@ -219,7 +229,7 @@ void handle_input(chip8_t *chip8) {
 }
 
 #ifdef DEBUG
-void print_debug_info(chip8_t *chip8) {
+void print_debug_info(chip8_t *chip8, const sdl_display_t sdl, const config_t config) {
 	printf("Addres: 0x%04X, Opcode: 0x%04X, Desc: ",
 				   	chip8->PC-2, chip8->inst.opcode);
 	switch ((chip8->inst.opcode >> 12) & 0xF) {
@@ -234,6 +244,14 @@ void print_debug_info(chip8_t *chip8) {
 					printf("Return from subroutine to address 0x%04X\n",(chip8->stack_ptr - 1));	
 
 				}
+				else {
+					printf("(Unimplemented Opcode) \n");
+				}
+				break;
+			case 0x1:
+				// 0x1NNN: Jump to address NNN
+				printf("Jump to address 0x%04X\n", chip8->inst.NNN);
+				chip8->PC = chip8->inst.NNN;
 				break;
 			case 0x2:
 				printf("Call subroutine at address: 0x%04X\n", chip8->inst.NNN);
@@ -247,6 +265,53 @@ void print_debug_info(chip8_t *chip8) {
 				
 				chip8->stack_ptr++;
 				break;
+			case 0x6:
+				printf("Set VX to address: 0x%04X\n", chip8->inst.NN);
+				// 0x6XNN: Set VX to NN
+				chip8->V[chip8->inst.X] = chip8->inst.NN;
+				break; 
+			case 0x7:
+				// 0x7XNN: Add NN to VX
+				printf("Add %d to V%d\n", chip8->inst.NN, chip8->inst.X);
+				chip8->V[chip8->inst.X] = chip8->inst.NN;
+				break;
+			case 0xA:
+				// 0xANNN: Sets I (memory register) to the address NNN
+				printf("Set I (memory address) to address: 0x%04X\n", chip8->inst.NNN);
+				chip8->I = chip8->inst.NNN;
+				break;
+			case 0xD:
+				// 0xDXYN: Draw sprite at XY, N rows 
+				printf("Draw sprite at x: %d, y: %d, n rows: %d \n", chip8->V[chip8->inst.X], chip8->V[chip8->inst.Y], chip8->inst.N);
+				// Get X and Y by accessing VX and VY
+				uint8_t X = chip8->V[chip8->inst.X];
+				uint8_t Y = chip8->V[chip8->inst.Y];
+				uint8_t N = chip8->inst.N;
+
+				// For loop for N rows
+				for (int i = 0; i <= N; i++) {
+					// Get 8-bit data in ram of location I+i (i iterates N)
+					uint8_t sprite_data = chip8->ram[chip8->I+i];
+					for (int w = 7; w <= 0; w--) {
+						// Get bit value corresponding to current pixel with respect to width
+						// To do this: pad zeroes on the least significant end and AND
+						// to obtain the desired bit
+						int pixel_value = (sprite_data & (1 << w));
+						
+						if (pixel_value) {
+							set_draw_color_fg(sdl, config);	
+							SDL_Rect rect;
+							// Set the rectangle x and y position relative to
+							// the current width and height position
+							rect.x = X+w;
+							rect.y = Y+i;
+							rect.w = 1;
+							rect.h = 1;
+							SDL_RenderFillRect(sdl.renderer, &rect);
+						}
+					}
+				}
+				break;
 			default: 
 				printf("Unimplemented opcode\n"); 
 				break;		// Unimplemented or invalid opcode
@@ -256,12 +321,16 @@ void print_debug_info(chip8_t *chip8) {
 #endif
 
 // Emulate 1 CHIP8 instruction
-void emulate_instruction(chip8_t *chip8) {
+void emulate_instruction(chip8_t *chip8, const sdl_display_t sdl, const config_t config) {
 	// Get next opcode from ram
-	// Shifts upper big-endian byte into upper little-endian
-	// and then obtains the lower big-endian byte and OR's it into lower little-endian byte:
+			
+	// Convert the big-endian opcode in memory to little-endian format.
+	// This involves shifting the upper byte into the corresponding little endian position
+	// and OR-ing it with the lower little-endian byte
 	chip8->inst.opcode = (chip8->ram[chip8->PC] << 8) | chip8->ram[chip8->PC+1];
-	chip8->PC += 2; // Pre-increment program counter for next opcode
+	
+	// Increment the program counter to point to the next opcode
+	chip8->PC += 2; 
 
 	// Fill out instruction format	
 	chip8->inst.NNN = chip8->inst.opcode & 0x0FFF;
@@ -271,7 +340,7 @@ void emulate_instruction(chip8_t *chip8) {
 	chip8->inst.Y = (chip8->inst.opcode >> 4) & 0x0F;
 
 #ifdef DEBUG
-	print_debug_info(chip8);
+	print_debug_info(chip8, sdl, config);
 #endif	
 
 	// Emulate opcode
@@ -299,14 +368,20 @@ void emulate_instruction(chip8_t *chip8) {
 				// Set PC to subroutine
 				// Next instruction executed will be at the PC address (the subroutine)
 				chip8->PC = chip8->inst.NNN;
-				
+					
 				chip8->stack_ptr++;
 				break;
+			case 0xA:
+				// 0xANNN: Sets I (memory register) to the address NNN
+				chip8->I = chip8->inst.NNN;
+				break;
+
 			default: 
 				break;		// Unimplemented or invalid opcode
 	}
 
 }
+
 
 
 
@@ -344,7 +419,7 @@ int main(int argc, char **argv) {
 
 		//Get_time(); since last Get_time();
 
-		emulate_instruction(&chip8);
+		emulate_instruction(&chip8, sdl, config);
 
 		//Delay for approx. 60hz/60fps (16.67ms)
 		SDL_Delay(16);
@@ -358,3 +433,4 @@ int main(int argc, char **argv) {
 	cleanup_sdl(sdl);
 	exit(EXIT_SUCCESS);
 }
+
