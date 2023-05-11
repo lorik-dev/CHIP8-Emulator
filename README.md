@@ -1,7 +1,11 @@
 # CHIP8-Emulator
-Yet another CHIP8 emulator 
+CHIP8 is an interpreted programing language developed in the 70s for use on certain microcomputers. It was designed for simple games and applications on these systems. It offers simple graphics and input routines. Some popular CHIP8 games include Tetris, Space Invaders and Pong.
 
-Written in C using SDL
+This emulator allows you to play games and applications designed for the CHIP8 platform
+
+*Written in C using SDL*
+
+**Currently a work in progress**
 
 # Build
 
